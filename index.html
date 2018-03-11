@@ -209,7 +209,6 @@ function update_plot(div_id, plot_types, pitchprog_toggles,
     layout.showlegend = false;
 
     var config = {};
-    //config.staticPlot = true;
     config.displayModeBar = false;
     
     Plotly.newPlot(div, plot_data, layout, config); 
@@ -228,7 +227,7 @@ function update_plot(div_id, plot_types, pitchprog_toggles,
     }
   }
   Plotly.restyle(div, update);
-  startDragBehavior();  // should not be necessary, but appears so
+  startDragBehavior();  
 }
 
 
@@ -311,12 +310,10 @@ function adjust_toggles(keyboard_dpitch) {
 }
 
 
-
 ///////////////////////////////////////////////////////////////////////////////
 // Main
 
 update_scenario(pitchprog_toggles_init);
-startDragBehavior();
 
 </script>
 
