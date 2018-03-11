@@ -1,0 +1,323 @@
+<html>
+<head>
+<title>Pitch Designer</title>
+<link rel=icon href="favicon.png">
+
+<style>
+html, body { height:100%; margin:0; padding:0 }
+div { position:fixed; width:50%; height:50%; pointer-events:none; }
+#NW { top:0;   left:0; margin:10; pointer-events:all; } 
+#NE { top:0;   left:50%; }
+#SW { top:50%; left:0; pointer-events:all; }
+#SE { top:50%; left:50% } 
+ 
+th, td {
+  padding: 2px;
+  text-align: left;
+}
+
+/* This is necessary to make Plotly points selectable. */
+.scatterlayer .trace:last-child path {
+  pointer-events: all;
+  cursor: move;
+}
+</style>
+
+<script src="plotly-latest.min.js"></script>
+<script src="jquery-3.2.1.min.js"></script>
+<script src="math.js"></script>
+<script src="aero.js"></script>
+<script src="pitch_designer.js"></script>
+
+</head>
+
+<body>
+
+<div id="NW">
+<h2>Pitch Designer</h2>
+Change the pitch profile with the toggles using the mouse or arrow keys.
+<br><br>
+<table id="results_table"></table>
+<br>
+<label><input id="qalpha_constraint_checkbox" type="checkbox" checked>
+Follow q-alpha constraint</label>
+<br><br>
+</div>
+
+<div id="NE">
+</div>
+
+<div id="SE">
+</div>
+
+<div id="SW">
+Plot channel: <select id="plot_select"></select>
+</div>
+
+</body>
+
+<script>
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Global vars
+
+var channels_ = {};
+
+var use_qalpha_constraint_ = $("#qalpha_constraint_checkbox").prop("checked");
+
+// to keep track of which toggle was last selected
+var select_count_ = 0;  
+var idx_selected_ = 0;
+
+// Initial pitch toggles
+var pitchprog_toggles_init = {};
+pitchprog_toggles_init.t = [22., 60., 100];
+pitchprog_toggles_init.pitch = [88, 81., 52.];
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Event handlers
+
+$("#plot_select").on("change", function() { 
+  update_plot("SW", [$("#plot_select").val()], [], []);
+});
+
+
+$("#qalpha_constraint_checkbox").change(function() {
+  use_qalpha_constraint_ = $(this).prop("checked"); 
+  adjust_toggles();
+});
+
+
+$(window).on('resize', function(){
+  var div_ids = ["NE", "NW", "SE", "SW"];
+  for (var i = 0; i < div_ids.length; ++i) {
+    var div = $("#"+div_ids[i])[0];
+    if (div.className != "js-plotly-plot") continue;
+    Plotly.Plots.resize(div);
+  }
+});
+
+
+$(document).keydown(function(e) {
+  var dpitch = 0;
+  switch(e.which) {
+    case 37: // left
+    idx_selected_--;
+    break;
+
+    case 38: // up
+    dpitch = 1;
+    break;
+
+    case 39: // right
+    idx_selected_++;
+    break;
+
+    case 40: // down
+    dpitch = -1;
+    break;
+
+    default: return; // exit this handler for other keys
+  }
+  e.preventDefault(); // prevent the default action (scroll / move caret)
+ 
+  adjust_toggles(dpitch);
+});
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Plotting functions
+
+function update_scenario(pitchprog_toggles) {
+  channels_ = run_pitch_designer(pitchprog_toggles);
+
+  // Populate drop-down menu on first load
+  if ($("#plot_select")[0].children.length == 0) {
+    var tags = Object.keys(channels_)
+    for (var i = 0; i < tags.length; ++i) {
+      var tag = tags[i];
+      if (!("option" in channels_[tag])) continue;
+      $("#plot_select").append(
+        $("<option></option>").attr("value", tag).text(channels_[tag].label)); 
+    }
+  }
+ 
+  load_results_table();
+  update_plot("NE", ["pitch", "toggles"], pitchprog_toggles, 
+              /*[0, 200.]*/[], [-20., 100.]);
+  update_plot("SW", [$("#plot_select").val()], [], []);
+  update_plot("SE", ["qalpha", "qalpha_constraint", "qalpha_constraint_negative"],
+              [], [0., 200.]);
+}
+
+
+function update_plot(div_id, plot_types, pitchprog_toggles, 
+                     x_range, y_range) {
+  var div = $("#"+div_id)[0];
+  
+  // Create plot_data array
+  var layout = {};
+  var plot_data = [];
+  for (var i = 0; i < plot_types.length; ++i) {
+    var plot_type = plot_types[i];
+    if (plot_type == "toggles") {
+      plot_data.push({
+        x: pitchprog_toggles.t, 
+        y: pitchprog_toggles.pitch,
+        type: 'scatter',
+        cliponaxis: false,
+        mode: 'markers',
+        marker: {
+          size: 20,
+          symbol: "circle-open-dot",
+          color: "#b00",
+          line: { width: 2 }
+        },
+        hoverinfo: 'none'
+      });
+    } else {
+      if (i == 0) {
+        layout.xaxis = {title: channels_["t"].label};
+        if (x_range) { 
+          layout.xaxis.range = x_range;
+        }
+        layout.yaxis = {title: channels_[plot_type].label};
+        if (y_range) { 
+          layout.yaxis.range = y_range;
+        }
+      }
+      var color = (i == 0) ? "blue" : "red";
+      plot_data.push({
+        x: channels_["t"].data, 
+        y: channels_[plot_type].data,
+        text: plot_type,
+        marker: {color:color}
+      });
+    }
+  }
+
+  // Either create or update plot depending on if it exists already
+  var create_plot = true;
+  for (var i = 0; i < div.children.length; ++i) {
+    if (div.children[i].className == "js-plotly-plot") create_plot = false;
+  }
+  if (create_plot) {
+    layout.margin = {pad: 0, l:40, r:40, t:40, b:40};
+    layout.showlegend = false;
+
+    var config = {};
+    //config.staticPlot = true;
+    config.displayModeBar = false;
+    
+    Plotly.newPlot(div, plot_data, layout, config); 
+  }
+
+  var update = {"x": [], "y": []};
+  for (var i = 0; i < plot_data.length; ++i) {
+    update.x.push(plot_data[i].x);
+    update.y.push(plot_data[i].y);
+    if (plot_types[i] == "toggles") {
+      var colors = [];
+      for (var k = 0; k < pitchprog_toggles.t.length; ++k) {
+        colors.push((k == idx_selected_) ? "#0b0" : "#b00");
+      }
+      Plotly.restyle(div, {"marker.color":[colors]}, i);
+    }
+  }
+  Plotly.restyle(div, update);
+  startDragBehavior();  // should not be necessary, but appears so
+}
+
+
+function get_row(channel) {
+  var row = $('<tr></tr>');
+  row.append($('<td></td>').text(channel.label));
+  var data = $('<td></td>').text(channel.data);
+  if (channel.data == "converged" || channel.data == "ok") {
+    data.css("color", "green");
+  } else if (channel.data == "unconverged" || channel.data == "violated") {  
+    data.css("color", "red");
+  }
+  row.append(data);
+  return row;
+}
+
+
+function load_results_table() {
+  var table = $("#results_table");
+  table.empty();
+  table.append(get_row(channels_.t_final));
+  table.append(get_row(channels_.m_prop_final));
+  table.append(get_row(channels_.q_max));
+  table.append(get_row(channels_.terminal_guidance));
+  table.append(get_row(channels_.qalpha_violated));
+}
+
+
+// Draggable events from:
+// https://gist.github.com/niclasmattsson/7bceb05fba6c71c78d507adae3d29417#file-index-html-L261
+function startDragBehavior() {
+  var d3 = Plotly.d3;
+  var drag = d3.behavior.drag();
+  drag.on("drag", function() {
+    var translate = d3.transform(d3.select(this).attr("transform")).translate;
+    var xmouse = translate[0];
+    var ymouse = d3.event.y;
+    d3.select(this).attr("transform", "translate(" + [xmouse, ymouse] + ")");
+ 
+    var div = $("#NE")[0];
+    var xaxis = div._fullLayout.xaxis;
+    var yaxis = div._fullLayout.yaxis;
+
+    this.x_new = xaxis.p2l(xmouse);
+    this.y_new = yaxis.p2l(ymouse);
+    this.select_count = ++select_count_;
+  });
+  drag.on("dragend", function() {
+    adjust_toggles();
+  });
+  d3.selectAll(".scatterlayer .trace:last-of-type .points path").call(drag);
+}
+  
+  
+function adjust_toggles(keyboard_dpitch) {
+  var div = $("#NE")[0];
+  var container = div.querySelector(".scatterlayer .trace:last-of-type g");
+  var points = container.getElementsByTagName("path");
+  var pitchprog_toggles = {};
+  pitchprog_toggles.t = []
+  pitchprog_toggles.pitch = []
+  idx_selected_ = clamp(idx_selected_, 0, points.length-1);
+  for (var i = 0; i < points.length; ++i) {
+    if (!("x_new" in points[i])) {  // point has been moved
+      points[i].x_new = points[i].__data__.x;
+      points[i].y_new = points[i].__data__.y;
+      points[i].select_count = -1;
+    }
+    if (typeof keyboard_dpitch == "undefined") {
+      if (points[i].select_count == select_count_) idx_selected_ = i;
+    } else {
+      if (i == idx_selected_) points[i].y_new += keyboard_dpitch*0.1;
+    }
+    t = points[i].x_new;
+    pitch = points[i].y_new;
+    pitchprog_toggles.t.push(t);
+    pitchprog_toggles.pitch.push(pitch);
+  }
+  update_scenario(pitchprog_toggles);
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Main
+
+update_scenario(pitchprog_toggles_init);
+startDragBehavior();
+
+</script>
+
+</html>
